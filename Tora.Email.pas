@@ -1,5 +1,5 @@
 {
-  Classe criada por: Bruno Deuner
+  Criador: Bruno Deuner
   Autorização de contas:
   Gmail: https://myaccount.google.com/lesssecureapps
   Hotmail: Não precisa

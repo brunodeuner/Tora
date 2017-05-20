@@ -1,5 +1,9 @@
-{
+﻿{
   Criador: Bruno Deuner
+  Contato
+  Email: bruno_deuner@hotmail.com
+
+  Informações
   Autorização de contas:
   Gmail: https://myaccount.google.com/lesssecureapps
   Hotmail: Não precisa

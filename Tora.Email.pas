@@ -1,3 +1,11 @@
+{
+  Classe criada por: Bruno Deuner
+  Autoriza√ß√£o de contas:
+  Gmail: https://myaccount.google.com/lesssecureapps
+  Hotmail: N√£o precisa
+}
+
+
 unit Tora.Email;
 
 interface
@@ -7,8 +15,14 @@ uses
   System.Generics.Collections,
   System.SysUtils,
   Inifiles,
-  IdSMTP, IdSSLOpenSSL, IdMessage, IdText, IdAttachmentFile,
-  IdExplicitTLSClientServerBase, IdEMailAddress, IdPOP3;
+  IdSMTP,
+  IdSSLOpenSSL,
+  IdMessage,
+  IdText,
+  IdAttachmentFile,
+  IdExplicitTLSClientServerBase,
+  IdEMailAddress,
+  IdPOP3;
 
 type
 
@@ -247,7 +261,7 @@ type
     property Send: TSend read FSend write SetSend;
     property Receive: TReceive read FReceive write SetReceive;
     property Account: TAccount read GetAccount write SetAccount;
-    // MetÛdos
+    // Met√≥dos
     procedure Cancel;
     procedure Enviar;
     procedure Receber;
@@ -364,21 +378,21 @@ begin
   SSL := TIdSSLIOHandlerSocketOpenSSL.Create;
   IdSMTP := TIdSMTP.Create;
 
-  // ConfiguraÁ„o do protocolo SSL (TIdSSLIOHandlerSocketOpenSSL)
+  // Configura√ß√£o do protocolo SSL (TIdSSLIOHandlerSocketOpenSSL)
   SSL.SSLOptions.Method := sslvSSLv23;
   SSL.SSLOptions.Mode := sslmClient;
-  // ConfiguraÁ„o do servidor SMTP (TIdSMTP)
+  // Configura√ß√£o do servidor SMTP (TIdSMTP)
   ConfigSMTP;
   if FThread.CheckTerminated then
     abort;
-  // Conex„o e autenticaÁ„o
+  // Conex√£o e autentica√ß√£o
   try
     IdSMTP.Connect;
   except
     if Assigned(FOnErrorConnection) then
     begin
       MessageError :=
-        'Ocorreu um erro durante a conex„o com o servidor de e-mail.';
+        'Ocorreu um erro durante a conex√£o com o servidor de e-mail.';
       FOnErrorConnection(Self, MessageError);
     end;
     abort;
@@ -391,7 +405,7 @@ begin
     if Assigned(FOnErrorAuthentication) then
     begin
       MessageError :=
-        'Conta configurada teve problemas de autenticaÁ„o, verifique a conta!';
+        'Conta configurada teve problemas de autentica√ß√£o, verifique a conta!';
       FOnErrorAuthentication(Self, MessageError);
     end;
     abort;
@@ -430,7 +444,7 @@ begin
   // Desconecta do servidor
   if Assigned(IdSMTP) then
     IdSMTP.Disconnect;
-  // LiberaÁ„o dos objetos da memÛria
+  // Libera√ß√£o dos objetos da mem√≥ria
   if Assigned(SSL) then
     FreeAndNil(SSL);
   if Assigned(IdSMTP) then
@@ -456,11 +470,11 @@ begin
   Enviou := False;
   try
 
-    // Conecta se ainda n„o estiver conectado
+    // Conecta se ainda n√£o estiver conectado
     if not Assigned(IdSMTP) or not IdSMTP.Connected then
       Connect;
 
-    // Assume remetente com os dados de origem caso n„o informado
+    // Assume remetente com os dados de origem caso n√£o informado
     if RemetenteEmail = EmptyStr then
       RemetenteEmail := Account.UserName;
     if RemetenteNome = EmptyStr then
@@ -468,16 +482,16 @@ begin
 
     // Cria mensagem
     IdMessage := TIdMessage.Create;
-    // ConfiguraÁ„o da mensagem
+    // Configura√ß√£o da mensagem
     IdMessage.From.Address := RemetenteEmail;
     IdMessage.From.Name := RemetenteNome;
     IdMessage.Subject := FAssunto;
     IdMessage.Encoding := meMIME;
-    // Adiciona destinat·rios
+    // Adiciona destinat√°rios
     IdMessage.ReplyTo.EMailAddresses := IdMessage.From.Address;
     for i := 0 to FDestino.Count - 1 do
       IdMessage.Recipients.Add.Text := FDestino[i];
-    // ConfiguraÁ„o do corpo do email
+    // Configura√ß√£o do corpo do email
     IdText := TIdText.Create(IdMessage.MessageParts);
     IdText.Body := FTexto;
     // Anexa anexos
@@ -502,7 +516,7 @@ end;
 
 procedure TSend.Send;
 begin
-  // Cria thread para conectar se n„o conectado ainda e enviar email
+  // Cria thread para conectar se n√£o conectado ainda e enviar email
   FThread := TThread.CreateAnonymousThread(
     procedure
     begin
@@ -659,7 +673,7 @@ begin
     end
     else
     begin
-      raise Exception.Create('FunÁ„o n„o disponivel para Hotmail');
+      raise Exception.Create('Fun√ß√£o n√£o disponivel para Hotmail');
     end;
     IdPOP.UserName := Account.UserName;
     IdPOP.Password := Account.Password;
@@ -673,8 +687,8 @@ begin
     try
       IdPOP.Connect;
     except
-      MessageError := 'Erro durante a conex„o com o servidor de email!' + #13#10
-        + 'Verifique a conta e se o servidor de e-mail est· funcionando.';
+      MessageError := 'Erro durante a conex√£o com o servidor de email!' + #13#10
+        + 'Verifique a conta e se o servidor de e-mail est√° funcionando.';
       if Assigned(FOnErrorConnection) then
         FOnErrorConnection(Self, MessageError);
       abort;

@@ -9,7 +9,6 @@
   Hotmail: Não precisa
 }
 
-
 unit Tora.Email;
 
 interface
@@ -205,7 +204,6 @@ type
     FRemetenteNome: string;
     FRemetenteEmail: string;
     // Method
-    procedure ConfigSMTP;
     procedure ConfigConnection;
     procedure CreateAndConfigMessage(var IdMessage: TIdMessage);
     procedure AjustaRemetente;

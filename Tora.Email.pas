@@ -18,6 +18,7 @@ uses
   System.Classes,
   System.Generics.Collections,
   System.SysUtils,
+  System.RegularExpressions,
   Inifiles,
   IdSMTP,
   IdSSLOpenSSL,
@@ -26,81 +27,176 @@ uses
   IdAttachmentFile,
   IdExplicitTLSClientServerBase,
   IdEMailAddress,
-  IdPOP3;
+  IdPOP3,
+  IdAssignedNumbers;
 
 type
 
-  TSMTP = (smNenhum, smHotmail, smGmail);
+  { Exceptions }
+  EEmailError = class;
+  EConnectError = class;
+  EAuthentError = class;
+  ESendError = class;
+  EReceiveError = class;
+
+  EEmailError = class(Exception)
+  private type
+    TEKind = (eUnknown, eConnect, eAuthent, eSend, eReceive);
+  private
+    FKind: TEKind;
+    procedure SetKind(const Value: TEKind);
+  public
+    property Kind: TEKind read FKind write SetKind default eUnknown;
+    constructor Create; overload;
+    constructor Create(Msg: String; Kind: TEKind); overload; virtual;
+  end;
+
+  EConnectError = class(EEmailError)
+    constructor Create(const Msg: string);
+  end;
+
+  EAuthentError = class(EEmailError)
+    constructor Create(const Msg: string);
+  end;
+
+  ESendError = class(EEmailError)
+    constructor Create(const Msg: string);
+  end;
+
+  EReceiveError = class(EEmailError)
+    constructor Create(const Msg: string);
+  end;
+
+  { CallBacks }
+
   TAfterOperation = procedure(Sender: TObject; Status: Boolean) of object;
   TReadMessage = procedure(Sender: TObject; Mensagem: TIdMessage) of object;
-  TErroConnection = procedure(Sender: TObject; Mensagem: String) of object;
-  TErroAuthentication = TErroConnection;
+  TErroEmail = procedure(Sender: TObject; Error: Exception) of object;
+
+  { Records }
+  TSMTP = (smNenhum, smHotmail, smGmail);
   TOrder = (toCrescente, toDecrecente);
 
   TAccount = class(TPersistent)
   private
-    FSMTP: TSMTP;
     FPassword: String;
     FUserName: String;
     FName: String;
-    procedure DiscoverySMTP;
-    function FileNameDefault: String;
     procedure SetPassword(const Value: String);
-    procedure SetUserName(const Value: String);
+    procedure SetUserName(const Value: String); virtual;
     procedure SetName(const Value: String);
   public
-    constructor Create;
     property Name: String read FName write SetName;
     property Password: String read FPassword write SetPassword;
     property UserName: String read FUserName write SetUserName;
-    function IsValid: Boolean;
     procedure Assign(Source: TPersistent); override;
-    procedure LoadFromFile(NameLoad: string = 'Default');
-    procedure LoadFromFileByName;
-    procedure SaveToFile; overload;
+    function IsValid: Boolean; virtual;
+  end;
+
+  TEmailAccount = class(TAccount)
+  private
+    FSMTP: TSMTP;
+    procedure DiscoverySMTP;
+    function GetSMTP: TSMTP;
+    procedure SetUserName(const Value: String); override;
+  protected
+    property SMTP: TSMTP read GetSMTP;
+  public
+    function IsValid: Boolean; override;
   end;
 
   IEmail = interface
     // End thread
     procedure TerminateThread(Sender: TObject);
-    // Metodo
-    procedure Execute;
     // Getter and Setters
-    procedure SetAccount(Value: TAccount);
     procedure SetOnAfterConnect(const Value: TAfterOperation);
     procedure SetOnBeforeConnect(const Value: TNotifyEvent);
-    procedure SetOnErrorConnection(const Value: TErroConnection);
-    function GetAccount: TAccount;
+    procedure SetOnBeforeExecute(const Value: TNotifyEvent);
+    procedure SetOnAfterExecute(const Value: TNotifyEvent);
+    procedure SetOnError(const Value: TErroEmail);
     function GetOnBeforeConnect: TNotifyEvent;
     function GetOnAfterConnect: TAfterOperation;
-    function GetOnErrorConnection: TErroConnection;
+    function GetOnBeforeExecute: TNotifyEvent;
+    function GetOnAfterExecute: TNotifyEvent;
+    function GetOnError: TErroEmail;
     // Metodos
     procedure Connect;
+    procedure Execute;
     procedure Cancel;
-    // Propriedades
-    property Account: TAccount read GetAccount write SetAccount;
     // Callbacks
     property OnBeforeConnect: TNotifyEvent read GetOnBeforeConnect
       write SetOnBeforeConnect;
     property OnAfterConnect: TAfterOperation read GetOnAfterConnect
       write SetOnAfterConnect;
-    property OnErrorConnection: TErroConnection read GetOnErrorConnection
-      write SetOnErrorConnection;
+    property OnBeforeExecute: TNotifyEvent read GetOnBeforeExecute
+      write SetOnBeforeExecute;
+    property OnAfterExecute: TNotifyEvent read GetOnAfterExecute
+      write SetOnAfterExecute;
+    property OnError: TErroEmail read GetOnError write SetOnError;
   end;
 
-  TSend = class(TInterfacedObject, IEmail)
+  TEmail = class(TInterfacedObject, IEmail)
+  private
+    // Fields
+    FAccount: TEmailAccount;
+    FThread: TThread;
+    // Eventos
+    FOnAfterConnect: TAfterOperation;
+    FOnBeforeConnect: TNotifyEvent;
+    FOnError: TErroEmail;
+    FOnAfterExecute: TNotifyEvent;
+    FOnBeforeExecute: TNotifyEvent;
+    // Getter and Setters
+    procedure SetOnAfterConnect(const Value: TAfterOperation);
+    procedure SetOnBeforeConnect(const Value: TNotifyEvent);
+    procedure SetAccount(const Value: TEmailAccount);
+    procedure SetOnError(const Value: TErroEmail);
+    procedure SetOnAfterExecute(const Value: TNotifyEvent);
+    procedure SetOnBeforeExecute(const Value: TNotifyEvent);
+    function GetOnBeforeConnect: TNotifyEvent;
+    function GetOnAfterConnect: TAfterOperation;
+    function GetOnAfterExecute: TNotifyEvent;
+    function GetOnBeforeExecute: TNotifyEvent;
+    function GetOnError: TErroEmail;
+    // End thread
+    procedure TerminateThread(Sender: TObject);
+  protected
+    // Fields
+    SSL: TIdSSLIOHandlerSocketOpenSSL;
+    // Methods
+    procedure BeforeConnect;
+    function DoConnect: Boolean; virtual; abstract;
+    procedure AfterConnect(Connected: Boolean);
+    procedure DoExecute; virtual; abstract;
+  public
+    // Construtor/Destrutor
+    constructor Create; virtual;
+    destructor Destroy; override;
+    // Metodos
+    procedure Connect;
+    procedure Execute; virtual;
+    procedure Cancel; virtual;
+    // Propriedades
+    property Account: TEmailAccount read FAccount write SetAccount;
+    // Callbacks
+    property OnBeforeConnect: TNotifyEvent read GetOnBeforeConnect
+      write SetOnBeforeConnect;
+    property OnAfterConnect: TAfterOperation read GetOnAfterConnect
+      write SetOnAfterConnect;
+    property OnBeforeExecute: TNotifyEvent read GetOnBeforeExecute
+      write SetOnBeforeExecute;
+    property OnAfterExecute: TNotifyEvent read GetOnAfterExecute
+      write SetOnAfterExecute;
+    property OnError: TErroEmail read GetOnError write SetOnError;
+  end;
+
+  TEmailSend = class(TEmail)
   private
     IdSMTP: TIdSMTP;
-    SSL: TIdSSLIOHandlerSocketOpenSSL;
-    FThread: TThread;
     Enviou: Boolean;
     // Callbacks
     FOnAfterSend: TAfterOperation;
-    FOnBeforeConnect: TNotifyEvent;
-    FOnAfterConnect: TAfterOperation;
     FOnBeforeSend: TNotifyEvent;
-    FOnErrorAuthentication: TErroAuthentication;
-    FOnErrorConnection: TErroConnection;
     // Fields
     FAssunto: string;
     FAnexos: TStringList;
@@ -108,23 +204,12 @@ type
     FDestino: TStringList;
     FRemetenteNome: string;
     FRemetenteEmail: string;
-    FAowner: TObject;
-    FAccount: TAccount;
-    // End thread
-    procedure TerminateThread(Sender: TObject);
-    // Metodo
-    procedure Execute;
+    // Method
     procedure ConfigSMTP;
+    procedure ConfigConnection;
+    procedure CreateAndConfigMessage(var IdMessage: TIdMessage);
+    procedure AjustaRemetente;
     // Getter and Setters
-    procedure SetAccount(Value: TAccount);
-    procedure SetOnAfterConnect(const Value: TAfterOperation);
-    procedure SetOnBeforeConnect(const Value: TNotifyEvent);
-    procedure SetOnErrorAuthentication(const Value: TErroAuthentication);
-    procedure SetOnErrorConnection(const Value: TErroConnection);
-    function GetAccount: TAccount;
-    function GetOnBeforeConnect: TNotifyEvent;
-    function GetOnAfterConnect: TAfterOperation;
-    function GetOnErrorConnection: TErroConnection;
     procedure SetAfterSend(const Value: TAfterOperation);
     procedure SetAnexos(const Value: TStringList);
     procedure SetAssunto(const Value: string);
@@ -133,16 +218,14 @@ type
     procedure SetRemetenteEmail(const Value: string);
     procedure SetRemetenteNome(const Value: string);
     procedure SetTexto(const Value: TStringList);
+  protected
+    // Metodos
+    procedure DoExecute; override;
+    function DoConnect: Boolean; override;
   public
     // Construtor
-    constructor Create; overload;
-    constructor Create(Aowner: TObject); overload;
-    constructor Create(Aowner: TObject; Account: TAccount); overload;
+    constructor Create; override;
     destructor Destroy; override;
-    // Metodos
-    procedure Connect;
-    procedure Send;
-    procedure Cancel;
     // Propriedades
     property RemetenteEmail: string read FRemetenteEmail
       write SetRemetenteEmail;
@@ -151,190 +234,87 @@ type
     property Anexos: TStringList read FAnexos write SetAnexos;
     property Texto: TStringList read FTexto write SetTexto;
     property Destino: TStringList read FDestino write SetDestino;
-    property Account: TAccount read GetAccount write SetAccount;
     // Callbacks
     property OnBeforeSend: TNotifyEvent read FOnBeforeSend write SetBeforeSend;
     property OnAfterSend: TAfterOperation read FOnAfterSend write SetAfterSend;
-    property OnBeforeConnect: TNotifyEvent read GetOnBeforeConnect
-      write SetOnBeforeConnect;
-    property OnAfterConnect: TAfterOperation read GetOnAfterConnect
-      write SetOnAfterConnect;
-    property OnErrorConnection: TErroConnection read FOnErrorConnection
-      write SetOnErrorConnection;
-    property OnErrorAuthentication: TErroAuthentication
-      read FOnErrorAuthentication write SetOnErrorAuthentication;
   end;
 
-  TReceive = class(TInterfacedObject, IEmail)
+  TEmailReceive = class(TEmail)
   private
     IdPOP: TIdPop3;
-    SSL: TIdSSLIOHandlerSocketOpenSSL;
-    FThread: TThread;
     // Callbacks
-    FOnAfterConnect: TAfterOperation;
-    FOnBeforeReceive: TNotifyEvent;
-    FOnBeforeConnect: TNotifyEvent;
-    FOnAfterReceive: TAfterOperation;
     FOnReadMessage: TReadMessage;
-    FOnErrorConnection: TErroConnection;
     // Fields
     FEmails: TList<TIdMessage>;
     FInicial: Cardinal;
     FQuantidade: Cardinal;
     FOrdem: TOrder;
-    FAowner: TObject;
-    FAccount: TAccount;
     MsgProcess: Cardinal;
     MsgPos: Cardinal;
     MsgCount: Cardinal;
-    FOnErrorReceiveMessage: TNotifyEvent;
-    // End Thread
-    procedure TerminateThread(Sender: TObject);
-    // Metodos
+    // Method
     procedure AdicionaEmail
       (Lista: System.Generics.Collections.TList<TIdMessage>; i: Integer);
-    procedure Execute;
     // Getters and Setters
-    procedure SetAccount(Value: TAccount);
-    procedure SetOnAfterConnect(const Value: TAfterOperation);
-    procedure SetOnBeforeConnect(const Value: TNotifyEvent);
-    procedure SetOnErrorConnection(const Value: TErroConnection);
-    function GetAccount: TAccount;
-    function GetOnBeforeConnect: TNotifyEvent;
-    function GetOnAfterConnect: TAfterOperation;
-    function GetOnErrorConnection: TErroConnection;
-    procedure SetAfterReceive(const Value: TAfterOperation);
-    procedure SetBeforeReceive(const Value: TNotifyEvent);
     procedure SetInicial(const Value: Cardinal);
     procedure SetOrdem(const Value: TOrder);
     procedure SetQuantidade(const Value: Cardinal);
-    function GetFinished: Boolean;
     procedure SetReadMessage(const Value: TReadMessage);
-    procedure SetOnErrorReceiveMessage(const Value: TNotifyEvent);
+    function GetFinished: Boolean;
+  protected
+    // Metodos
+    procedure DoExecute; override;
+    function DoConnect: Boolean; override;
   public
     // Construtor/Destructor
-    constructor Create; overload;
-    constructor Create(Aowner: TObject); overload;
-    constructor Create(Aowner: TObject; Account: TAccount); overload;
     destructor Destroy; override;
-    // Metodos
-    procedure Connect;
-    procedure Receive;
-    procedure Cancel;
     // Propriedades
     property Emails: TList<TIdMessage> read FEmails;
     property Inicial: Cardinal read FInicial write SetInicial default 0;
     property Quantidade: Cardinal read FQuantidade write SetQuantidade
       default 0;
     property Ordem: TOrder read FOrdem write SetOrdem default toDecrecente;
-    property Account: TAccount read GetAccount write SetAccount;
     property Finished: Boolean read GetFinished;
     // CallBack
-    property OnBeforeConnect: TNotifyEvent read GetOnBeforeConnect
-      write SetOnBeforeConnect;
-    property OnAfterConnect: TAfterOperation read GetOnAfterConnect
-      write SetOnAfterConnect;
-    property OnErrorConnection: TErroConnection read GetOnErrorConnection
-      write SetOnErrorConnection;
-    property OnBeforeReceive: TNotifyEvent read FOnBeforeReceive
-      write SetBeforeReceive;
-    property OnAfterReceive: TAfterOperation read FOnAfterReceive
-      write SetAfterReceive;
     property OnReadMessage: TReadMessage read FOnReadMessage
       write SetReadMessage;
-    property OnErrorReceiveMessage: TNotifyEvent read FOnErrorReceiveMessage
-      write SetOnErrorReceiveMessage;
   end;
 
-  TEmail = class
-  private
-    // Fields
-    FSend: TSend;
-    FReceive: TReceive;
-    FAccount: TAccount;
-    // Metodos
-    function GetAccount: TAccount;
-    procedure SetAccount(Value: TAccount);
-    procedure SetReceive(const Value: TReceive);
-    procedure SetSend(const Value: TSend);
+  TEmailFactory = class
+  private type
+    TEmailOperation = (emSend, emReceive);
   public
-    // Construtor/Destrutor
-    constructor Create;
-    destructor Destroy; Override;
-    // Propriedades
-    property Send: TSend read FSend write SetSend;
-    property Receive: TReceive read FReceive write SetReceive;
-    property Account: TAccount read GetAccount write SetAccount;
-    // Metódos
-    procedure Cancel;
-    procedure Enviar;
-    procedure Receber;
+    class function GetTEmail(EmailOperation: TEmailOperation): TEmail;
   end;
 
 implementation
 
-uses
-  IdAssignedNumbers, Vcl.Dialogs;
-
 { TEmail }
 
-constructor TEmail.Create;
+procedure TEmail.BeforeConnect;
 begin
-  // Cria Listas
-  FReceive := TReceive.Create(Self);
-  FSend := TSend.Create(Self);
-  FAccount := TAccount.Create;
+  if FThread.CheckTerminated then
+    abort;
+  if Assigned(FOnBeforeConnect) then
+    FOnBeforeConnect(Self);
+  if FThread.CheckTerminated then
+    abort;
+  // Instancia objetos
+  if not Assigned(SSL) then
+    SSL := TIdSSLIOHandlerSocketOpenSSL.Create(nil);
 end;
 
-destructor TEmail.Destroy;
+procedure TEmail.AfterConnect(Connected: Boolean);
 begin
-  FreeAndNil(FReceive);
-  FreeAndNil(FSend);
-  UnLoadOpenSSLLibrary;
-  FreeAndNil(FAccount);
-end;
-
-procedure TEmail.Enviar;
-begin
-  FSend.Account.Assign(Account);
-  FSend.Send;
+  if FThread.CheckTerminated then
+    abort;
+  if Assigned(FOnAfterConnect) then
+    FOnAfterConnect(Self, Connected);
+  if FThread.CheckTerminated then
+    abort;
 end;
 
 procedure TEmail.Cancel;
-begin
-  FSend.Cancel;
-  FReceive.Cancel;
-end;
-
-function TEmail.GetAccount: TAccount;
-begin
-  result := FAccount;
-end;
-
-procedure TEmail.Receber;
-begin
-  FReceive.Account.Assign(Account);
-  FReceive.Receive;
-end;
-
-procedure TEmail.SetAccount(Value: TAccount);
-begin
-  FAccount := Value;
-end;
-
-procedure TEmail.SetReceive(const Value: TReceive);
-begin
-  FReceive := Value;
-end;
-
-procedure TEmail.SetSend(const Value: TSend);
-begin
-  FSend := Value;
-end;
-
-{ TSend }
-
-procedure TSend.Cancel;
 begin
   if Assigned(FThread) then
   begin
@@ -345,15 +325,225 @@ begin
   end;
 end;
 
-procedure TSend.ConfigSMTP;
+procedure TEmail.Connect;
 begin
+  try
+    BeforeConnect;
+    AfterConnect(DoConnect);
+  except
+    on E: EEmailError do
+      if Assigned(FOnError) then
+        FOnError(Self, E);
+  end;
+end;
+
+procedure TEmail.TerminateThread(Sender: TObject);
+begin
+  if Assigned(FOnAfterExecute) then
+    FOnAfterExecute(Self);
+end;
+
+constructor TEmail.Create;
+begin
+  FAccount := TEmailAccount.Create;
+end;
+
+destructor TEmail.Destroy;
+begin
+  FreeAndNil(FAccount);
+  if Assigned(SSL) then
+    FreeAndNil(SSL);
+  UnLoadOpenSSLLibrary;
+end;
+
+procedure TEmail.Execute;
+begin
+  if not FAccount.IsValid then
+    raise Exception.Create('Email ' + FAccount.UserName + ' inválido!');
+  FThread := TThread.CreateAnonymousThread(
+    procedure
+    begin
+      try
+        DoExecute;
+      except
+        on E: EEmailError do
+          if Assigned(FOnError) then
+            FOnError(Self, E);
+      end;
+    end);
+  with FThread do
+  begin
+    FreeOnTerminate := False;
+    OnTerminate := TerminateThread;
+    Start;
+  end;
+end;
+
+function TEmail.GetOnAfterConnect: TAfterOperation;
+begin
+  result := FOnAfterConnect;
+end;
+
+function TEmail.GetOnAfterExecute: TNotifyEvent;
+begin
+  result := FOnAfterExecute;
+end;
+
+function TEmail.GetOnBeforeConnect: TNotifyEvent;
+begin
+  result := FOnBeforeConnect;
+end;
+
+function TEmail.GetOnBeforeExecute: TNotifyEvent;
+begin
+  result := FOnBeforeExecute;
+end;
+
+function TEmail.GetOnError: TErroEmail;
+begin
+  result := FOnError;
+end;
+
+procedure TEmail.SetAccount(const Value: TEmailAccount);
+begin
+  FAccount := Value;
+end;
+
+procedure TEmail.SetOnAfterConnect(const Value: TAfterOperation);
+begin
+  FOnAfterConnect := Value;
+end;
+
+procedure TEmail.SetOnAfterExecute(const Value: TNotifyEvent);
+begin
+  FOnAfterExecute := Value;
+end;
+
+procedure TEmail.SetOnBeforeConnect(const Value: TNotifyEvent);
+begin
+  FOnBeforeConnect := Value;
+end;
+
+procedure TEmail.SetOnBeforeExecute(const Value: TNotifyEvent);
+begin
+  FOnBeforeExecute := Value;
+end;
+
+procedure TEmail.SetOnError(const Value: TErroEmail);
+begin
+  FOnError := Value;
+end;
+
+{ TSend }
+
+function TEmailSend.DoConnect: Boolean;
+var
+  MessageError: string;
+begin
+  result := False;
+  // Instancia SMTP caso ainda não esteja instanciado
+  if not Assigned(IdSMTP) then
+    IdSMTP := TIdSMTP.Create(nil);
+  // Configura conexão
+  ConfigConnection;
+  // Conexão e autenticação
+  try
+    IdSMTP.Connect;
+  except
+    raise EConnectError.Create
+      ('Ocorreu um erro durante a conexão com o servidor de e-mail.');
+  end;
+  if FThread.CheckTerminated then
+    abort;
+  try
+    IdSMTP.Authenticate;
+    result := True;
+  except
+    raise EAuthentError.Create
+      ('Ocorreu um erro durante a autenticação da conta de e-mail, verifique a conta!');
+  end;
+end;
+
+constructor TEmailSend.Create;
+begin
+  inherited;
+  FAnexos := TStringList.Create;
+  FTexto := TStringList.Create;
+  FDestino := TStringList.Create;
+end;
+
+destructor TEmailSend.Destroy;
+begin
+  // Cancela thread caso esteja executando
+  Cancel;
+  // Desconecta e libera SMTP
+  if Assigned(IdSMTP) then
+  begin
+    IdSMTP.Disconnect;
+    FreeAndNil(IdSMTP);
+  end;
+  // Elimina listas
+  FreeAndNil(FAnexos);
+  FreeAndNil(FTexto);
+  FreeAndNil(FDestino);
+  FreeAndNil(FAccount);
+  inherited;
+end;
+
+procedure TEmailSend.AjustaRemetente;
+begin
+  // Assume remetente com os dados de origem caso não informado
+  if RemetenteEmail = EmptyStr then
+    RemetenteEmail := FAccount.UserName;
+  if RemetenteNome = EmptyStr then
+    if FAccount.Name <> EmptyStr then
+      RemetenteNome := FAccount.Name
+    else
+      RemetenteNome := FAccount.UserName;
+end;
+
+procedure TEmailSend.CreateAndConfigMessage(var IdMessage: TIdMessage);
+var
+  i: Integer;
+  IdText: TIdText;
+begin
+  if FThread.CheckTerminated then
+    abort;
+  // Cria mensagem
+  IdMessage := TIdMessage.Create;
+  // Configuração da mensagem
+  IdMessage.From.Address := RemetenteEmail;
+  IdMessage.From.Name := RemetenteNome;
+  IdMessage.Subject := FAssunto;
+  IdMessage.Encoding := meMIME;
+  // Adiciona destinatários
+  IdMessage.ReplyTo.EMailAddresses := IdMessage.From.Address;
+  for i := 0 to FDestino.Count - 1 do
+    IdMessage.Recipients.Add.Text := FDestino[i];
+  // Configuração do corpo do email
+  IdText := TIdText.Create(IdMessage.MessageParts);
+  IdText.Body := FTexto;
+  // Anexa anexos
+  for i := 0 to FAnexos.Count - 1 do
+    if FileExists(FAnexos[i]) then
+      TIdAttachmentFile.Create(IdMessage.MessageParts, FAnexos[i]);
+  if FThread.CheckTerminated then
+    abort;
+end;
+
+procedure TEmailSend.ConfigConnection;
+begin
+  // Configuração do protocolo SSL (TIdSSLIOHandlerSocketOpenSSL)
+  SSL.SSLOptions.Method := sslvSSLv23;
+  SSL.SSLOptions.Mode := sslmClient;
+  // Configuração do servidor SMTP (TIdSMTP)
   with IdSMTP do
   begin
     IOHandler := SSL;
     AuthType := satDefault;
-    UserName := Account.UserName;
-    Password := Account.Password;
-    if Account.FSMTP = smGmail then
+    UserName := FAccount.UserName;
+    Password := FAccount.Password;
+    if Self.FAccount.SMTP = smGmail then
     begin
       UseTLS := utUseImplicitTLS;
       Port := IdPORT_ssmtp;
@@ -368,147 +558,31 @@ begin
   end;
 end;
 
-procedure TSend.Connect;
-var
-  MessageError: string;
-begin
-  if FThread.CheckTerminated then
-    abort;
-  if Assigned(FOnBeforeConnect) then
-    FOnBeforeConnect(FAowner);
-  if FThread.CheckTerminated then
-    abort;
-  // Instancia objetos
-  SSL := TIdSSLIOHandlerSocketOpenSSL.Create;
-  IdSMTP := TIdSMTP.Create;
-
-  // Configuração do protocolo SSL (TIdSSLIOHandlerSocketOpenSSL)
-  SSL.SSLOptions.Method := sslvSSLv23;
-  SSL.SSLOptions.Mode := sslmClient;
-  // Configuração do servidor SMTP (TIdSMTP)
-  ConfigSMTP;
-  if FThread.CheckTerminated then
-    abort;
-  // Conexão e autenticação
-  try
-    IdSMTP.Connect;
-  except
-    if Assigned(FOnErrorConnection) then
-    begin
-      MessageError :=
-        'Ocorreu um erro durante a conexão com o servidor de e-mail.';
-      FOnErrorConnection(Self, MessageError);
-    end;
-    abort;
-  end;
-  if FThread.CheckTerminated then
-    abort;
-  try
-    IdSMTP.Authenticate;
-  except
-    if Assigned(FOnErrorAuthentication) then
-    begin
-      MessageError :=
-        'Conta configurada teve problemas de autenticação, verifique a conta!';
-      FOnErrorAuthentication(Self, MessageError);
-    end;
-    abort;
-  end;
-
-  if FThread.CheckTerminated then
-    abort;
-  if Assigned(FOnAfterConnect) then
-    FOnAfterConnect(FAowner, IdSMTP.Connected);
-  if FThread.CheckTerminated then
-    abort;
-end;
-
-constructor TSend.Create;
-begin
-  FAnexos := TStringList.Create;
-  FTexto := TStringList.Create;
-  FDestino := TStringList.Create;
-  FAccount := TAccount.Create;
-end;
-
-constructor TSend.Create(Aowner: TObject);
-begin
-  Create;
-  FAowner := Aowner;
-end;
-
-constructor TSend.Create(Aowner: TObject; Account: TAccount);
-begin
-  Create(Aowner);
-  Self.Account := Account;
-end;
-
-destructor TSend.Destroy;
-begin
-  // Desconecta do servidor
-  if Assigned(IdSMTP) then
-    IdSMTP.Disconnect;
-  // Liberação dos objetos da memória
-  if Assigned(SSL) then
-    FreeAndNil(SSL);
-  if Assigned(IdSMTP) then
-    FreeAndNil(IdSMTP);
-  // Elimina listas
-  FreeAndNil(FAnexos);
-  FreeAndNil(FTexto);
-  FreeAndNil(FDestino);
-  FreeAndNil(FAccount);
-  inherited;
-end;
-
-procedure TSend.Execute;
+procedure TEmailSend.DoExecute;
 var
   IdMessage: TIdMessage;
-  IdText: TIdText;
-  i: Integer;
 begin
   if Assigned(FOnBeforeSend) then
-    FOnBeforeSend(FAowner);
+    FOnBeforeSend(Self);
   if FThread.CheckTerminated then
     abort;
   Enviou := False;
   try
-
     // Conecta se ainda não estiver conectado
     if not Assigned(IdSMTP) or not IdSMTP.Connected then
       Connect;
-
-    // Assume remetente com os dados de origem caso não informado
-    if RemetenteEmail = EmptyStr then
-      RemetenteEmail := Account.UserName;
-    if RemetenteNome = EmptyStr then
-      RemetenteNome := Account.UserName;
-
-    // Cria mensagem
-    IdMessage := TIdMessage.Create;
-    // Configuração da mensagem
-    IdMessage.From.Address := RemetenteEmail;
-    IdMessage.From.Name := RemetenteNome;
-    IdMessage.Subject := FAssunto;
-    IdMessage.Encoding := meMIME;
-    // Adiciona destinatários
-    IdMessage.ReplyTo.EMailAddresses := IdMessage.From.Address;
-    for i := 0 to FDestino.Count - 1 do
-      IdMessage.Recipients.Add.Text := FDestino[i];
-    // Configuração do corpo do email
-    IdText := TIdText.Create(IdMessage.MessageParts);
-    IdText.Body := FTexto;
-    // Anexa anexos
-    for i := 0 to FAnexos.Count - 1 do
-      if FileExists(FAnexos[i]) then
-        TIdAttachmentFile.Create(IdMessage.MessageParts, FAnexos[i]);
-
-    if FThread.CheckTerminated then
-      abort;
-
-    // Envia e-mail
-    IdSMTP.Send(IdMessage);
-    Enviou := true;
+    // Ajusta remetente caso não informado
+    AjustaRemetente;
+    // Cria e configura mensagem
+    CreateAndConfigMessage(IdMessage);
+    try
+      // Envia e-mail
+      IdSMTP.Send(IdMessage);
+      Enviou := True;
+    except
+      raise ESendError.Create
+        ('Erro ao enviar e-mail, este erro pode ocorrer devido ao destinário inválido ou serviço de envio de email indisponível!');
+    end;
 
   finally
     FreeAndNil(IdMessage);
@@ -518,116 +592,49 @@ begin
   end;
 end;
 
-procedure TSend.Send;
-begin
-  // Cria thread para conectar se não conectado ainda e enviar email
-  FThread := TThread.CreateAnonymousThread(
-    procedure
-    begin
-      Execute;
-    end);
-  with FThread do
-  begin
-    FreeOnTerminate := False;
-    OnTerminate := TerminateThread;
-    Start;
-  end;
-end;
-
-procedure TSend.TerminateThread(Sender: TObject);
-begin
-  if Assigned(FOnAfterSend) then
-    FOnAfterSend(FAowner, Enviou);
-end;
-
-procedure TSend.SetAccount(Value: TAccount);
-begin
-  FAccount := Value;
-end;
-
-procedure TSend.SetAfterSend(const Value: TAfterOperation);
+procedure TEmailSend.SetAfterSend(const Value: TAfterOperation);
 begin
   FOnAfterSend := Value;
 end;
 
-procedure TSend.SetAnexos(const Value: TStringList);
+procedure TEmailSend.SetAnexos(const Value: TStringList);
 begin
   FAnexos := Value;
 end;
 
-procedure TSend.SetAssunto(const Value: string);
+procedure TEmailSend.SetAssunto(const Value: string);
 begin
   FAssunto := Value;
 end;
 
-procedure TSend.SetBeforeSend(const Value: TNotifyEvent);
+procedure TEmailSend.SetBeforeSend(const Value: TNotifyEvent);
 begin
   FOnBeforeSend := Value;
 end;
 
-procedure TSend.SetDestino(const Value: TStringList);
+procedure TEmailSend.SetDestino(const Value: TStringList);
 begin
   FDestino := Value;
 end;
 
-procedure TSend.SetOnAfterConnect(const Value: TAfterOperation);
-begin
-  FOnAfterConnect := Value;
-end;
-
-procedure TSend.SetOnBeforeConnect(const Value: TNotifyEvent);
-begin
-  OnBeforeConnect := Value;
-end;
-
-procedure TSend.SetOnErrorAuthentication(const Value: TErroAuthentication);
-begin
-  FOnErrorAuthentication := Value;
-end;
-
-procedure TSend.SetOnErrorConnection(const Value: TErroConnection);
-begin
-  FOnErrorConnection := Value;
-end;
-
-procedure TSend.SetRemetenteEmail(const Value: string);
+procedure TEmailSend.SetRemetenteEmail(const Value: string);
 begin
   FRemetenteEmail := Value;
 end;
 
-procedure TSend.SetRemetenteNome(const Value: string);
+procedure TEmailSend.SetRemetenteNome(const Value: string);
 begin
   FRemetenteNome := Value;
 end;
 
-procedure TSend.SetTexto(const Value: TStringList);
+procedure TEmailSend.SetTexto(const Value: TStringList);
 begin
   FTexto := Value;
 end;
 
-function TSend.GetAccount: TAccount;
-begin
-  result := FAccount;
-end;
-
-function TSend.GetOnAfterConnect: TAfterOperation;
-begin
-  result := FOnAfterConnect;
-end;
-
-function TSend.GetOnBeforeConnect: TNotifyEvent;
-begin
-  result := OnBeforeConnect;
-end;
-
-function TSend.GetOnErrorConnection: TErroConnection;
-begin
-  result := OnErrorConnection;
-end;
-
 { TReceive }
 
-procedure TReceive.AdicionaEmail
+procedure TEmailReceive.AdicionaEmail
   (Lista: System.Generics.Collections.TList<TIdMessage>; i: Integer);
 var
   IdMessage: TIdMessage;
@@ -639,133 +646,77 @@ begin
   Lista.Add(IdMessage);
   MsgPos := i;
   if Assigned(FOnReadMessage) then
-    FOnReadMessage(FAowner, IdMessage);
+    FOnReadMessage(Self, IdMessage);
   if FThread.CheckTerminated then
     abort;
 end;
 
-procedure TReceive.Cancel;
-begin
-  if Assigned(FThread) then
-  begin
-    FThread.Terminate;
-    if not FThread.Finished then
-      FThread.WaitFor;
-    FreeAndNil(FThread);
-  end;
-end;
-
-procedure TReceive.Connect;
+function TEmailReceive.DoConnect: Boolean;
 var
   MessageError: string;
 begin
-  if FThread.CheckTerminated then
-    abort;
-  if Assigned(FOnBeforeConnect) then
-    FOnBeforeConnect(FAowner);
-  if FThread.CheckTerminated then
-    abort;
+  result := False;
   if not Assigned(IdPOP) then
     IdPOP := TIdPop3.Create(nil);
-  if not Assigned(SSL) then
-    SSL := TIdSSLIOHandlerSocketOpenSSL.Create(nil);
+  if Self.FAccount.SMTP = smGmail then
   begin
-    if Account.FSMTP = smGmail then
-    begin
-      IdPOP.Host := 'pop.gmail.com';
-      IdPOP.Port := 995;
-    end
-    else
-    begin
-      raise Exception.Create('Função não disponivel para Hotmail');
-    end;
-    IdPOP.UserName := Account.UserName;
-    IdPOP.Password := Account.Password;
-    SSL.Host := IdPOP.Host;
-    SSL.Port := IdPOP.Port;
-    SSL.Destination := SSL.Host + ':' + IntToStr(SSL.Port);
-    IdPOP.IOHandler := SSL;
-    IdPOP.UseTLS := utUseImplicitTLS;
-    if FThread.CheckTerminated then
-      abort;
-    try
-      IdPOP.Connect;
-    except
-      MessageError := 'Erro durante a conexão com o servidor de email!' + #13#10
-        + 'Verifique a conta e se o servidor de e-mail está funcionando.';
-      if Assigned(FOnErrorConnection) then
-        FOnErrorConnection(Self, MessageError);
-      abort;
-    end;
+    IdPOP.Host := 'pop.gmail.com';
+    IdPOP.Port := 995;
+  end
+  else
+  begin
+    raise Exception.Create('Função não disponivel para Hotmail');
   end;
+  IdPOP.UserName := Self.FAccount.UserName;
+  IdPOP.Password := Self.FAccount.Password;
+  SSL.Host := IdPOP.Host;
+  SSL.Port := IdPOP.Port;
+  SSL.Destination := SSL.Host + ':' + IntToStr(SSL.Port);
+  IdPOP.IOHandler := SSL;
+  IdPOP.UseTLS := utUseImplicitTLS;
   if FThread.CheckTerminated then
     abort;
-  if Assigned(FOnAfterConnect) then
-    FOnAfterConnect(FAowner, IdPOP.Connected);
-  if FThread.CheckTerminated then
-    abort;
+  try
+    IdPOP.Connect;
+    result := True;
+  except
+    raise EConnectError.Create('Erro durante a conexão com o servidor de email!'
+      + #13#10 +
+      'Verifique a conta e se o servidor de e-mail está funcionando.');
+  end;
 end;
 
-constructor TReceive.Create;
-begin
-  Self.FAccount := TAccount.Create;
-end;
-
-constructor TReceive.Create(Aowner: TObject);
-begin
-  Create;
-  FAowner := Aowner;
-end;
-
-constructor TReceive.Create(Aowner: TObject; Account: TAccount);
-begin
-  Create(Aowner);
-  Self.Account := Account;
-end;
-
-destructor TReceive.Destroy;
+destructor TEmailReceive.Destroy;
 var
   i: Integer;
 begin
+  // Cancela thread caso esteja executando
+  Cancel;
   if Assigned(FEmails) then
   begin
     for i := 0 to FEmails.Count - 1 do
-    begin
       FEmails[i].Free;
-      FEmails[i] := nil;
-    end;
     FreeAndNil(FEmails);
   end;
   if Assigned(IdPOP) then
     FreeAndNil(IdPOP);
-  if Assigned(SSL) then
-    FreeAndNil(SSL);
-  if Assigned(FAccount) then
-    FreeAndNil(FAccount);
   inherited;
 end;
 
-procedure TReceive.Execute;
+procedure TEmailReceive.DoExecute;
 var
   i: Cardinal;
   MessageError: string;
 begin
-  MsgCount := 0;
-  if Assigned(FOnBeforeReceive) then
-    OnBeforeReceive(FAowner);
-  if FThread.CheckTerminated then
-    abort;
   if not Assigned(IdPOP) or not IdPOP.Connected then
     Connect;
+  MsgCount := 0;
   FEmails := TList<TIdMessage>.Create;
   try
     MsgCount := IdPOP.CheckMessages;
   except
-    MessageError :=
-      'Conta foi conectada, porem, ao tentar obter mensagem ocorreu um erro inesperado!';
-    if Assigned(OnErrorReceiveMessage) then
-      OnErrorReceiveMessage(Self);
-    abort;
+    raise EReceiveError.Create
+      ('Conta foi conectada, porem, ao tentar obter mensagem ocorreu um erro inesperado!');
   end;
   if (Quantidade = 0) or (Quantidade > MsgCount) then
     MsgProcess := MsgCount
@@ -779,110 +730,34 @@ begin
       AdicionaEmail(FEmails, i);
 end;
 
-procedure TReceive.Receive;
-begin
-  FThread := TThread.CreateAnonymousThread(
-    procedure
-    begin
-      Execute;
-    end);
-  with FThread do
-  begin
-    FreeOnTerminate := False;
-    OnTerminate := TerminateThread;
-    Start;
-  end;
-end;
-
-procedure TReceive.TerminateThread(Sender: TObject);
-begin
-  if Assigned(FOnAfterReceive) then
-    FOnAfterReceive(FAowner, Finished);
-end;
-
-procedure TReceive.SetAccount(Value: TAccount);
-begin
-  FAccount := Value;
-end;
-
-procedure TReceive.SetAfterReceive(const Value: TAfterOperation);
-begin
-  FOnAfterReceive := Value;
-end;
-
-procedure TReceive.SetBeforeReceive(const Value: TNotifyEvent);
-begin
-  FOnBeforeReceive := Value;
-end;
-
-procedure TReceive.SetInicial(const Value: Cardinal);
+procedure TEmailReceive.SetInicial(const Value: Cardinal);
 begin
   FInicial := Value;
 end;
 
-procedure TReceive.SetOnAfterConnect(const Value: TAfterOperation);
-begin
-  FOnAfterConnect := Value;
-end;
-
-procedure TReceive.SetOnBeforeConnect(const Value: TNotifyEvent);
-begin
-  OnBeforeConnect := Value;
-end;
-
-procedure TReceive.SetOnErrorConnection(const Value: TErroConnection);
-begin
-  FOnErrorConnection := Value;
-end;
-
-procedure TReceive.SetOnErrorReceiveMessage(const Value: TNotifyEvent);
-begin
-  FOnErrorReceiveMessage := Value;
-end;
-
-procedure TReceive.SetOrdem(const Value: TOrder);
+procedure TEmailReceive.SetOrdem(const Value: TOrder);
 begin
   FOrdem := Value;
 end;
 
-procedure TReceive.SetQuantidade(const Value: Cardinal);
+procedure TEmailReceive.SetQuantidade(const Value: Cardinal);
 begin
   FQuantidade := Value;
 end;
 
-procedure TReceive.SetReadMessage(const Value: TReadMessage);
+procedure TEmailReceive.SetReadMessage(const Value: TReadMessage);
 begin
   FOnReadMessage := Value;
 end;
 
-function TReceive.GetAccount: TAccount;
-begin
-  result := FAccount;
-end;
-
-function TReceive.GetFinished: Boolean;
+function TEmailReceive.GetFinished: Boolean;
 begin
   if (MsgCount = 0) or (MsgProcess < MsgCount) then
     result := False
   else if MsgProcess = MsgPos then
-    result := true
+    result := True
   else
     result := False;
-end;
-
-function TReceive.GetOnAfterConnect: TAfterOperation;
-begin
-  result := FOnAfterConnect;
-end;
-
-function TReceive.GetOnBeforeConnect: TNotifyEvent;
-begin
-  result := OnBeforeConnect;
-end;
-
-function TReceive.GetOnErrorConnection: TErroConnection;
-begin
-  result := OnErrorConnection;
 end;
 
 { TAccount }
@@ -892,6 +767,7 @@ begin
   if Source is TAccount then
     with TAccount(Source) do
     begin
+      Self.Name := Name;
       Self.Password := Password;
       Self.UserName := UserName;
     end
@@ -899,65 +775,9 @@ begin
     inherited Assign(Source);
 end;
 
-constructor TAccount.Create;
-begin
-  FName := 'Default';
-end;
-
-procedure TAccount.DiscoverySMTP;
-begin
-  if Pos('@HOTMAIL', UpperCase(Self.FUserName)) > 0 then
-    FSMTP := smHotmail
-  else if Pos('@GMAIL', UpperCase(Self.FUserName)) > 0 then
-    FSMTP := smGmail
-  else
-    FSMTP := smNenhum;
-end;
-
 function TAccount.IsValid: Boolean;
 begin
-  result := (FSMTP <> smNenhum) and (Password <> EmptyStr);
-end;
-
-function TAccount.FileNameDefault: String;
-begin
-  result := IncludeTrailingPathDelimiter(GetCurrentDir) + 'Config\Email.ini';
-end;
-
-procedure TAccount.LoadFromFile(NameLoad: string = 'Default');
-var
-  Ini: TIniFile;
-begin
-  if not FileExists(FileNameDefault) then
-    exit;
-  Ini := TIniFile.Create(FileNameDefault);
-  try
-    if Ini.SectionExists(NameLoad) then
-    begin
-      UserName := Ini.ReadString(NameLoad, 'Username', EmptyStr);
-      Password := Ini.ReadString(NameLoad, 'Password', EmptyStr);
-    end;
-  finally
-    FreeAndNil(Ini);
-  end;
-end;
-
-procedure TAccount.LoadFromFileByName;
-begin
-  LoadFromFile(FName);
-end;
-
-procedure TAccount.SaveToFile;
-var
-  Ini: TIniFile;
-begin
-  Ini := TIniFile.Create(FileNameDefault);
-  try
-    Ini.WriteString(Name, 'Username', FUserName);
-    Ini.WriteString(Name, 'Password', FPassword);
-  finally
-    FreeAndNil(Ini);
-  end;
+  result := FUserName = EmptyStr;
 end;
 
 procedure TAccount.SetName(const Value: String);
@@ -973,7 +793,100 @@ end;
 procedure TAccount.SetUserName(const Value: String);
 begin
   FUserName := Value;
+end;
+
+{ TEmailAccount }
+
+procedure TEmailAccount.DiscoverySMTP;
+begin
+  if Pos('@HOTMAIL', UpperCase(Self.FUserName)) > 0 then
+    FSMTP := smHotmail
+  else if Pos('@GMAIL', UpperCase(Self.FUserName)) > 0 then
+    FSMTP := smGmail
+  else
+    FSMTP := smNenhum;
+end;
+
+function TEmailAccount.GetSMTP: TSMTP;
+begin
+  result := FSMTP;
+end;
+
+function TEmailAccount.IsValid: Boolean;
+var
+  RegEx: TRegEx;
+begin
+  result := inherited;
+  if (FSMTP <> smNenhum) and (Password <> EmptyStr) then
+    RegEx := TRegEx.Create('(.)+@+.+[.]+(.)+');
+  if RegEx.IsMatch(FUserName) then
+    result := True;
+end;
+
+procedure TEmailAccount.SetUserName(const Value: String);
+begin
+  inherited;
   DiscoverySMTP;
+end;
+
+{ TEmailFactory }
+
+class function TEmailFactory.GetTEmail(EmailOperation: TEmailOperation): TEmail;
+begin
+  case EmailOperation of
+    emSend:
+      result := TEmailSend.Create;
+    emReceive:
+      result := TEmailReceive.Create;
+  else
+    result := nil;
+  end;
+end;
+
+{ EEmailError }
+
+constructor EEmailError.Create;
+begin
+  Create('Ocorreu um erro desconhecido ao utilizar e-mail', eUnknown);
+end;
+
+constructor EEmailError.Create(Msg: String; Kind: TEKind);
+begin
+  FKind := Kind;
+  Self.Message := Msg;
+end;
+
+procedure EEmailError.SetKind(const Value: TEKind);
+begin
+  FKind := Value;
+end;
+
+{ EConnectError }
+
+constructor EConnectError.Create(const Msg: string);
+begin
+  inherited Create(Msg, eConnect);
+end;
+
+{ EAuthentError }
+
+constructor EAuthentError.Create(const Msg: string);
+begin
+  inherited Create(Msg, eAuthent);
+end;
+
+{ ESendError }
+
+constructor ESendError.Create(const Msg: string);
+begin
+  inherited Create(Msg, eSend);
+end;
+
+{ EReceiveError }
+
+constructor EReceiveError.Create(const Msg: string);
+begin
+  inherited Create(Msg, eReceive);
 end;
 
 end.

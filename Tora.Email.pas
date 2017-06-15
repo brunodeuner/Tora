@@ -68,7 +68,6 @@ type
 
   { CallBacks }
 
-  TAfterOperation = procedure(Sender: TObject; Status: Boolean) of object;
   TReadMessage = procedure(Sender: TObject; Mensagem: TIdMessage) of object;
   TErroEmail = procedure(Sender: TObject; Error: Exception) of object;
 
@@ -108,13 +107,13 @@ type
     // End thread
     procedure TerminateThread(Sender: TObject);
     // Getter and Setters
-    procedure SetOnAfterConnect(const Value: TAfterOperation);
+    procedure SetOnAfterConnect(const Value: TNotifyEvent);
     procedure SetOnBeforeConnect(const Value: TNotifyEvent);
     procedure SetOnBeforeExecute(const Value: TNotifyEvent);
     procedure SetOnAfterExecute(const Value: TNotifyEvent);
     procedure SetOnError(const Value: TErroEmail);
     function GetOnBeforeConnect: TNotifyEvent;
-    function GetOnAfterConnect: TAfterOperation;
+    function GetOnAfterConnect: TNotifyEvent;
     function GetOnBeforeExecute: TNotifyEvent;
     function GetOnAfterExecute: TNotifyEvent;
     function GetOnError: TErroEmail;
@@ -122,10 +121,11 @@ type
     procedure Connect;
     procedure Execute;
     procedure Cancel;
+    function Connected: Boolean;
     // Callbacks
     property OnBeforeConnect: TNotifyEvent read GetOnBeforeConnect
       write SetOnBeforeConnect;
-    property OnAfterConnect: TAfterOperation read GetOnAfterConnect
+    property OnAfterConnect: TNotifyEvent read GetOnAfterConnect
       write SetOnAfterConnect;
     property OnBeforeExecute: TNotifyEvent read GetOnBeforeExecute
       write SetOnBeforeExecute;
@@ -140,20 +140,20 @@ type
     FAccount: TEmailAccount;
     FThread: TThread;
     // Eventos
-    FOnAfterConnect: TAfterOperation;
+    FOnAfterConnect: TNotifyEvent;
     FOnBeforeConnect: TNotifyEvent;
     FOnError: TErroEmail;
     FOnAfterExecute: TNotifyEvent;
     FOnBeforeExecute: TNotifyEvent;
     // Getter and Setters
-    procedure SetOnAfterConnect(const Value: TAfterOperation);
+    procedure SetOnAfterConnect(const Value: TNotifyEvent);
     procedure SetOnBeforeConnect(const Value: TNotifyEvent);
     procedure SetAccount(const Value: TEmailAccount);
     procedure SetOnError(const Value: TErroEmail);
     procedure SetOnAfterExecute(const Value: TNotifyEvent);
     procedure SetOnBeforeExecute(const Value: TNotifyEvent);
     function GetOnBeforeConnect: TNotifyEvent;
-    function GetOnAfterConnect: TAfterOperation;
+    function GetOnAfterConnect: TNotifyEvent;
     function GetOnAfterExecute: TNotifyEvent;
     function GetOnBeforeExecute: TNotifyEvent;
     function GetOnError: TErroEmail;
@@ -164,8 +164,8 @@ type
     SSL: TIdSSLIOHandlerSocketOpenSSL;
     // Methods
     procedure BeforeConnect;
-    function DoConnect: Boolean; virtual; abstract;
-    procedure AfterConnect(Connected: Boolean);
+    procedure DoConnect; virtual; abstract;
+    procedure AfterConnect;
     procedure DoExecute; virtual; abstract;
   public
     // Construtor/Destrutor
@@ -175,12 +175,13 @@ type
     procedure Connect;
     procedure Execute; virtual;
     procedure Cancel; virtual;
+    function Connected: Boolean; virtual; abstract;
     // Propriedades
     property Account: TEmailAccount read FAccount write SetAccount;
     // Callbacks
     property OnBeforeConnect: TNotifyEvent read GetOnBeforeConnect
       write SetOnBeforeConnect;
-    property OnAfterConnect: TAfterOperation read GetOnAfterConnect
+    property OnAfterConnect: TNotifyEvent read GetOnAfterConnect
       write SetOnAfterConnect;
     property OnBeforeExecute: TNotifyEvent read GetOnBeforeExecute
       write SetOnBeforeExecute;
@@ -194,7 +195,7 @@ type
     IdSMTP: TIdSMTP;
     Enviou: Boolean;
     // Callbacks
-    FOnAfterSend: TAfterOperation;
+    FOnAfterSend: TNotifyEvent;
     FOnBeforeSend: TNotifyEvent;
     // Fields
     FAssunto: string;
@@ -208,7 +209,7 @@ type
     procedure CreateAndConfigMessage(var IdMessage: TIdMessage);
     procedure AjustaRemetente;
     // Getter and Setters
-    procedure SetAfterSend(const Value: TAfterOperation);
+    procedure SetAfterSend(const Value: TNotifyEvent);
     procedure SetAnexos(const Value: TStringList);
     procedure SetAssunto(const Value: string);
     procedure SetBeforeSend(const Value: TNotifyEvent);
@@ -219,11 +220,13 @@ type
   protected
     // Metodos
     procedure DoExecute; override;
-    function DoConnect: Boolean; override;
+    procedure DoConnect; override;
   public
     // Construtor
     constructor Create; override;
     destructor Destroy; override;
+    // Methods
+    function Connected: Boolean; override;
     // Propriedades
     property RemetenteEmail: string read FRemetenteEmail
       write SetRemetenteEmail;
@@ -234,7 +237,7 @@ type
     property Destino: TStringList read FDestino write SetDestino;
     // Callbacks
     property OnBeforeSend: TNotifyEvent read FOnBeforeSend write SetBeforeSend;
-    property OnAfterSend: TAfterOperation read FOnAfterSend write SetAfterSend;
+    property OnAfterSend: TNotifyEvent read FOnAfterSend write SetAfterSend;
   end;
 
   TEmailReceive = class(TEmail)
@@ -262,10 +265,12 @@ type
   protected
     // Metodos
     procedure DoExecute; override;
-    function DoConnect: Boolean; override;
+    procedure DoConnect; override;
   public
     // Construtor/Destructor
     destructor Destroy; override;
+    // Methods
+    function Connected: Boolean; override;
     // Propriedades
     property Emails: TList<TIdMessage> read FEmails;
     property Inicial: Cardinal read FInicial write SetInicial default 0;
@@ -302,12 +307,12 @@ begin
     SSL := TIdSSLIOHandlerSocketOpenSSL.Create(nil);
 end;
 
-procedure TEmail.AfterConnect(Connected: Boolean);
+procedure TEmail.AfterConnect;
 begin
   if FThread.CheckTerminated then
     abort;
   if Assigned(FOnAfterConnect) then
-    FOnAfterConnect(Self, Connected);
+    FOnAfterConnect(Self);
   if FThread.CheckTerminated then
     abort;
 end;
@@ -327,7 +332,8 @@ procedure TEmail.Connect;
 begin
   try
     BeforeConnect;
-    AfterConnect(DoConnect);
+    DoConnect;
+    AfterConnect;
   except
     on E: EEmailError do
       if Assigned(FOnError) then
@@ -377,7 +383,7 @@ begin
   end;
 end;
 
-function TEmail.GetOnAfterConnect: TAfterOperation;
+function TEmail.GetOnAfterConnect: TNotifyEvent;
 begin
   result := FOnAfterConnect;
 end;
@@ -407,7 +413,7 @@ begin
   FAccount := Value;
 end;
 
-procedure TEmail.SetOnAfterConnect(const Value: TAfterOperation);
+procedure TEmail.SetOnAfterConnect(const Value: TNotifyEvent);
 begin
   FOnAfterConnect := Value;
 end;
@@ -434,11 +440,8 @@ end;
 
 { TSend }
 
-function TEmailSend.DoConnect: Boolean;
-var
-  MessageError: string;
+procedure TEmailSend.DoConnect;
 begin
-  result := False;
   // Instancia SMTP caso ainda não esteja instanciado
   if not Assigned(IdSMTP) then
     IdSMTP := TIdSMTP.Create(nil);
@@ -455,7 +458,6 @@ begin
     abort;
   try
     IdSMTP.Authenticate;
-    result := True;
   except
     raise EAuthentError.Create
       ('Ocorreu um erro durante a autenticação da conta de e-mail, verifique a conta!');
@@ -556,6 +558,11 @@ begin
   end;
 end;
 
+function TEmailSend.Connected: Boolean;
+begin
+  Result := Assigned(IdSMTP) and IdSMTP.Connected;
+end;
+
 procedure TEmailSend.DoExecute;
 var
   IdMessage: TIdMessage;
@@ -567,7 +574,7 @@ begin
   Enviou := False;
   try
     // Conecta se ainda não estiver conectado
-    if not Assigned(IdSMTP) or not IdSMTP.Connected then
+    if not Connected then
       Connect;
     // Ajusta remetente caso não informado
     AjustaRemetente;
@@ -590,7 +597,7 @@ begin
   end;
 end;
 
-procedure TEmailSend.SetAfterSend(const Value: TAfterOperation);
+procedure TEmailSend.SetAfterSend(const Value: TNotifyEvent);
 begin
   FOnAfterSend := Value;
 end;
@@ -649,11 +656,8 @@ begin
     abort;
 end;
 
-function TEmailReceive.DoConnect: Boolean;
-var
-  MessageError: string;
+procedure TEmailReceive.DoConnect;
 begin
-  result := False;
   if not Assigned(IdPOP) then
     IdPOP := TIdPop3.Create(nil);
   if Self.FAccount.SMTP = smGmail then
@@ -676,12 +680,16 @@ begin
     abort;
   try
     IdPOP.Connect;
-    result := True;
   except
     raise EConnectError.Create('Erro durante a conexão com o servidor de email!'
       + #13#10 +
       'Verifique a conta e se o servidor de e-mail está funcionando.');
   end;
+end;
+
+function TEmailReceive.Connected: Boolean;
+begin
+  Result := Assigned(IdPOP) and IdPOP.Connected;
 end;
 
 destructor TEmailReceive.Destroy;
@@ -704,9 +712,8 @@ end;
 procedure TEmailReceive.DoExecute;
 var
   i: Cardinal;
-  MessageError: string;
 begin
-  if not Assigned(IdPOP) or not IdPOP.Connected then
+  if not Connected then
     Connect;
   MsgCount := 0;
   FEmails := TList<TIdMessage>.Create;

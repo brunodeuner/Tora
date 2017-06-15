@@ -193,7 +193,6 @@ type
   TEmailSend = class(TEmail)
   private
     IdSMTP: TIdSMTP;
-    Enviou: Boolean;
     // Callbacks
     FOnAfterSend: TNotifyEvent;
     FOnBeforeSend: TNotifyEvent;
@@ -331,9 +330,12 @@ end;
 procedure TEmail.Connect;
 begin
   try
-    BeforeConnect;
-    DoConnect;
-    AfterConnect;
+    if not Connected then
+    begin
+      BeforeConnect;
+      DoConnect;
+      AfterConnect;
+    end;
   except
     on E: EEmailError do
       if Assigned(FOnError) then
@@ -368,7 +370,9 @@ begin
     procedure
     begin
       try
-        DoExecute;
+        Connect;
+        if Connected then
+          DoExecute;
       except
         on E: EEmailError do
           if Assigned(FOnError) then
@@ -560,7 +564,7 @@ end;
 
 function TEmailSend.Connected: Boolean;
 begin
-  Result := Assigned(IdSMTP) and IdSMTP.Connected;
+  result := Assigned(IdSMTP) and IdSMTP.Connected and IdSMTP.DidAuthenticate;
 end;
 
 procedure TEmailSend.DoExecute;
@@ -571,11 +575,7 @@ begin
     FOnBeforeSend(Self);
   if FThread.CheckTerminated then
     abort;
-  Enviou := False;
   try
-    // Conecta se ainda não estiver conectado
-    if not Connected then
-      Connect;
     // Ajusta remetente caso não informado
     AjustaRemetente;
     // Cria e configura mensagem
@@ -583,12 +583,10 @@ begin
     try
       // Envia e-mail
       IdSMTP.Send(IdMessage);
-      Enviou := True;
     except
       raise ESendError.Create
         ('Erro ao enviar e-mail, este erro pode ocorrer devido ao destinário inválido ou serviço de envio de email indisponível!');
     end;
-
   finally
     FreeAndNil(IdMessage);
     FreeAndNil(FDestino);
@@ -689,7 +687,7 @@ end;
 
 function TEmailReceive.Connected: Boolean;
 begin
-  Result := Assigned(IdPOP) and IdPOP.Connected;
+  result := Assigned(IdPOP) and IdPOP.Connected;
 end;
 
 destructor TEmailReceive.Destroy;
@@ -713,8 +711,6 @@ procedure TEmailReceive.DoExecute;
 var
   i: Cardinal;
 begin
-  if not Connected then
-    Connect;
   MsgCount := 0;
   FEmails := TList<TIdMessage>.Create;
   try
@@ -823,9 +819,11 @@ var
 begin
   result := inherited;
   if (FSMTP <> smNenhum) and (Password <> EmptyStr) then
+  begin
     RegEx := TRegEx.Create('(.)+@+.+[.]+(.)+');
-  if RegEx.IsMatch(FUserName) then
-    result := True;
+    if RegEx.IsMatch(FUserName) then
+      result := True;
+  end;
 end;
 
 procedure TEmailAccount.SetUserName(const Value: String);
